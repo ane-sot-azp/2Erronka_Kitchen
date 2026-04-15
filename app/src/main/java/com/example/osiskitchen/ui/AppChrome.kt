@@ -59,7 +59,6 @@ fun KitchenChrome(
 
     val configuration = LocalConfiguration.current
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-    val isTabletLandscape = isLandscape && configuration.screenWidthDp >= 840
     val bottomBarHeight = if (isLandscape) 110.dp else 150.dp
 
     val dateTimeFormatter = remember { SimpleDateFormat("dd/MM/yyyy  HH:mm", Locale.getDefault()) }
@@ -162,59 +161,32 @@ fun KitchenChrome(
             ActionIcon()
         }
 
-        if (isTabletLandscape) {
-            Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                content(Modifier.weight(1f).fillMaxHeight())
-                Column(
-                    modifier = Modifier.width(160.dp).fillMaxHeight().background(orange),
-                    verticalArrangement = Arrangement.SpaceEvenly,
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    TabIcon(
-                        tab = KitchenTab.Comandas,
-                        icon = Icons.Filled.ReceiptLong,
-                        contentDescription = "Komandak"
-                    )
-                    TabIcon(
-                        tab = KitchenTab.Platos,
-                        icon = Icons.Filled.RestaurantMenu,
-                        contentDescription = "Platerak"
-                    )
-                    TabIcon(
-                        tab = KitchenTab.Ingredientes,
-                        icon = Icons.Filled.Inventory2,
-                        contentDescription = "Osagaiak"
-                    )
-                }
-            }
-        } else {
-            content(Modifier.weight(1f).fillMaxWidth())
+        content(Modifier.weight(1f).fillMaxWidth())
 
-            Row(
-                modifier =
-                    Modifier.fillMaxWidth()
-                        .height(bottomBarHeight)
-                        .background(orange)
-                        .padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                TabIcon(
-                    tab = KitchenTab.Comandas,
-                    icon = Icons.Filled.ReceiptLong,
-                    contentDescription = "Komandak"
-                )
-                TabIcon(
-                    tab = KitchenTab.Platos,
-                    icon = Icons.Filled.RestaurantMenu,
-                    contentDescription = "Platerak"
-                )
-                TabIcon(
-                    tab = KitchenTab.Ingredientes,
-                    icon = Icons.Filled.Inventory2,
-                    contentDescription = "Osagaiak"
-                )
-            }
+        Row(
+            modifier =
+                Modifier.fillMaxWidth()
+                    .height(bottomBarHeight)
+                    .background(orange)
+                    .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            TabIcon(
+                tab = KitchenTab.Comandas,
+                icon = Icons.Filled.ReceiptLong,
+                contentDescription = "Komandak"
+            )
+            TabIcon(
+                tab = KitchenTab.Platos,
+                icon = Icons.Filled.RestaurantMenu,
+                contentDescription = "Platerak"
+            )
+            TabIcon(
+                tab = KitchenTab.Ingredientes,
+                icon = Icons.Filled.Inventory2,
+                contentDescription = "Osagaiak"
+            )
         }
     }
 }

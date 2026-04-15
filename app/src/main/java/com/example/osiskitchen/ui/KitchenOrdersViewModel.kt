@@ -24,12 +24,14 @@ data class KitchenOrdersUiState(
 )
 
 data class KitchenOrderGroup(
+    val eskariaId: Int?,
     val erreserbaId: Int,
     val txanda: String?,
     val customerName: String?,
     val personCount: Int?,
     val tablesLabel: String?,
     val fakturaId: Int?,
+    val eskariaEgoera: String?,
     val komandak: List<KitchenKomanda>
 )
 
@@ -45,7 +47,7 @@ data class KitchenKomanda(
 )
 
 class KitchenOrdersViewModel : ViewModel() {
-    private val apiBaseUrlLanPrimary = "http://192.168.2.101:5000/api"
+    private val apiBaseUrlLanPrimary = "http://192.168.10.5:5000/api"
     private val apiTraceTag = "OSIS_KITCHEN_API"
 
     private val _uiState = MutableStateFlow(KitchenOrdersUiState())
@@ -59,6 +61,51 @@ class KitchenOrdersViewModel : ViewModel() {
 
     private val plateraInfoCache = LinkedHashMap<Int, PlateraInfo>()
     private val komandaEgoeraCache = LinkedHashMap<Int, Boolean>()
+    private val komandaToEskariaId = HashMap<Int, Int>()
+    private val eskariaEgoeraById = HashMap<Int, String?>()
+
+    private data class ApiMotaLite(
+        val id: Int,
+        val izena: String
+    )
+
+    private data class ApiProduktuaLite(
+        val id: Int,
+        val izena: String,
+        val motaId: Int,
+        val prezioa: Double
+    )
+
+    private data class ApiMahaiaLite(
+        val id: Int,
+        val zenbakia: Int
+    )
+
+    private data class ApiErreserbaLite(
+        val id: Int,
+        val egunaOrdua: String?,
+        val bezeroIzena: String?,
+        val pertsonaKopurua: Int?,
+        val mahaiakId: Int,
+        val ordainduta: Int
+    )
+
+    private data class ApiEskariaProduktuaLite(
+        val produktuaId: Int,
+        val kantitatea: Int,
+        val prezioa: Double,
+        val produktuaIzena: String?
+    )
+
+    private data class ApiEskariaLite(
+        val id: Int,
+        val erreserbaId: Int,
+        val prezioa: Double,
+        val egoera: String?,
+        val produktuak: List<ApiEskariaProduktuaLite>,
+        val erreserbakLangileakId: Int?,
+        val erreserbakMahaiakId: Int?
+    )
 
     private data class LoadGroupsResult(
         val groups: List<KitchenOrderGroup>,
@@ -119,6 +166,12 @@ class KitchenOrdersViewModel : ViewModel() {
         val current = _uiState.value
         if (current.updatingKomandaIds.contains(komandaId)) return
 
+        val eskariaIdForKomanda = komandaToEskariaId[komandaId]
+        if (eskariaIdForKomanda != null) {
+            val currentEskariaEgoera = eskariaEgoeraById[eskariaIdForKomanda]
+            if (isEskariaDone(currentEskariaEgoera)) return
+        }
+
         komandaEgoeraCache[komandaId] = egoera
         if (komandaEgoeraCache.size > 800) {
             val firstKey = komandaEgoeraCache.keys.firstOrNull()
@@ -136,15 +189,55 @@ class KitchenOrdersViewModel : ViewModel() {
             }
 
         _uiState.value =
-            current.copy(
-                groups = updatedGroups,
-                updatingKomandaIds = current.updatingKomandaIds + komandaId,
-                error = null
+            current.copy(groups = updatedGroups, error = null)
+
+        val eskariaId = komandaToEskariaId[komandaId]
+        if (eskariaId == null) {
+            _uiState.value =
+                _uiState.value.copy(
+                    updatingKomandaIds = _uiState.value.updatingKomandaIds + komandaId
+                )
+            viewModelScope.launch {
+                try {
+                    withContext(Dispatchers.IO) { patchKomandaEgoera(komandaId, egoera) }
+                    val after = _uiState.value
+                    _uiState.value =
+                        after.copy(updatingKomandaIds = after.updatingKomandaIds - komandaId)
+                } catch (e: Exception) {
+                    val after = _uiState.value
+                    komandaEgoeraCache[komandaId] = !egoera
+                    val revertedGroups =
+                        after.groups.map { group ->
+                            group.copy(
+                                komandak =
+                                    group.komandak.map { k ->
+                                        if (k.id == komandaId) k.copy(egoera = !egoera) else k
+                                    }
+                            )
+                        }
+                    _uiState.value =
+                        after.copy(
+                            groups = revertedGroups,
+                            updatingKomandaIds = after.updatingKomandaIds - komandaId,
+                            error = e.message ?: e.javaClass.simpleName
+                        )
+                }
+            }
+            return
+        }
+
+        val allDone = allKomandasDoneForEskaria(updatedGroups, eskariaId)
+        if (!allDone || !egoera) return
+
+        _uiState.value =
+            _uiState.value.copy(
+                updatingKomandaIds = _uiState.value.updatingKomandaIds + komandaId
             )
 
         viewModelScope.launch {
             try {
-                withContext(Dispatchers.IO) { patchKomandaEgoera(komandaId, egoera) }
+                withContext(Dispatchers.IO) { markEskariaPrest(eskariaId) }
+                eskariaEgoeraById[eskariaId] = "Prest"
                 val after = _uiState.value
                 _uiState.value =
                     after.copy(updatingKomandaIds = after.updatingKomandaIds - komandaId)
@@ -170,9 +263,106 @@ class KitchenOrdersViewModel : ViewModel() {
         }
     }
 
+    private fun allKomandasDoneForEskaria(groups: List<KitchenOrderGroup>, eskariaId: Int): Boolean {
+        var hasAny = false
+        for (g in groups) {
+            for (k in g.komandak) {
+                val eId = komandaToEskariaId[k.id] ?: continue
+                if (eId != eskariaId) continue
+                hasAny = true
+                if (!k.egoera) return false
+            }
+        }
+        return hasAny
+    }
+
     private fun loadGroups(trace: ApiTrace): LoadGroupsResult {
         val todayYmd = todayYmd()
         val currentTxanda = currentTxanda()
+
+        komandaToEskariaId.clear()
+        eskariaEgoeraById.clear()
+
+        val motak = fetchMotak(trace)
+        val motaNameById = motak.associate { it.id to it.izena }
+
+        val produktuak = fetchProduktuak(trace)
+        val produktuaById = produktuak.associateBy { it.id }
+
+        val mahaiak = fetchMahaiak(trace)
+        val mahaiaZenbakiaById = mahaiak.associate { it.id to it.zenbakia }
+
+        val erreserbak = fetchErreserbak(trace)
+        val erreserbakOpenToday =
+            erreserbak.filter { e ->
+                e.ordainduta == 0 && (normalizeDateYmd(e.egunaOrdua) == todayYmd)
+            }
+
+        val groupsFromEskariak = ArrayList<KitchenOrderGroup>(erreserbakOpenToday.size)
+        var noEskariakCount = 0
+        for (e in erreserbakOpenToday) {
+            val eskariak = fetchEskariakByErreserba(e.id, trace)
+            if (eskariak.isEmpty()) {
+                noEskariakCount += 1
+                continue
+            }
+
+            for (eskaria in eskariak) {
+                eskariaEgoeraById[eskaria.id] = eskaria.egoera
+                val isDone = isEskariaDone(eskaria.egoera)
+                val komandak = ArrayList<KitchenKomanda>()
+                for (p in eskaria.produktuak) {
+                    val produktua = produktuaById[p.produktuaId]
+                    val motaId = produktua?.motaId
+                    val motaIzena = motaId?.let { motaNameById[it] }
+                    val komandaId = (eskaria.id * 100000) + p.produktuaId
+                    komandaToEskariaId[komandaId] = eskaria.id
+                    val cachedEgoera = komandaEgoeraCache[komandaId]
+                    komandak.add(
+                        KitchenKomanda(
+                            id = komandaId,
+                            platerakId = p.produktuaId,
+                            plateraIzena = p.produktuaIzena ?: produktua?.izena ?: "Produktua ${p.produktuaId}",
+                            kategoriaId = motaId,
+                            kategoriaIzena = motaIzena,
+                            kopurua = p.kantitatea,
+                            oharrak = null,
+                            egoera = if (isDone) true else (cachedEgoera ?: false)
+                        )
+                    )
+                }
+
+                if (komandak.isEmpty()) {
+                    noEskariakCount += 1
+                    continue
+                }
+
+                val mahaiaZenbakia = mahaiaZenbakiaById[e.mahaiakId]
+                val tablesLabel = mahaiaZenbakia?.let { "Mahai $it" } ?: "Mahai ${e.mahaiakId}"
+                groupsFromEskariak.add(
+                    KitchenOrderGroup(
+                        eskariaId = eskaria.id,
+                        erreserbaId = e.id,
+                        txanda = currentTxanda,
+                        customerName = e.bezeroIzena,
+                        personCount = e.pertsonaKopurua,
+                        tablesLabel = tablesLabel,
+                        fakturaId = null,
+                        eskariaEgoera = eskaria.egoera,
+                        komandak = komandak.sortedWith(compareBy<KitchenKomanda> { it.egoera }.thenBy { it.id })
+                    )
+                )
+            }
+        }
+
+        if (groupsFromEskariak.isNotEmpty()) {
+            val debugInfo =
+                "api=$apiBaseUrlLanPrimary hoy=$todayYmd txanda=$currentTxanda reservasOpenToday=${erreserbakOpenToday.size} grupos=${groupsFromEskariak.size} sinEskariak=$noEskariakCount"
+            return LoadGroupsResult(
+                groups = groupsFromEskariak.sortedWith(compareBy<KitchenOrderGroup> { it.eskariaId ?: Int.MAX_VALUE }.thenBy { it.erreserbaId }),
+                debugInfo = debugInfo
+            )
+        }
 
         val (erreserbakHoy, source) =
             runCatching { fetchErreserbakHoy(todayYmd, trace) }
@@ -210,12 +400,14 @@ class KitchenOrdersViewModel : ViewModel() {
 
             groups.add(
                 KitchenOrderGroup(
+                    eskariaId = null,
                     erreserbaId = e.id,
                     txanda = e.txanda,
                     customerName = e.izena,
                     personCount = e.pertsonaKopurua,
                     tablesLabel = e.tablesLabel,
                     fakturaId = fakturaId,
+                    eskariaEgoera = null,
                     komandak = komandak.sortedWith(compareBy<KitchenKomanda> { it.egoera }.thenBy { it.id })
                 )
             )
@@ -237,6 +429,313 @@ class KitchenOrdersViewModel : ViewModel() {
             groups = groups.sortedWith(compareBy<KitchenOrderGroup> { it.tablesLabel ?: "" }.thenBy { it.erreserbaId }),
             debugInfo = debugInfo
         )
+    }
+
+    private fun fetchMotak(trace: ApiTrace): List<ApiMotaLite> {
+        val candidates =
+            apiBaseUrlCandidates().flatMap { baseUrl ->
+                listOf(
+                    "$baseUrl/Kategoriak",
+                    "$baseUrl/kategoriak"
+                )
+            }.distinct()
+
+        var lastError: String? = null
+        var okBody: String? = null
+        for (candidateUrl in candidates) {
+            try {
+                val (code, body) = httpGet(candidateUrl)
+                if (code !in 200..299) {
+                    lastError = "url=$candidateUrl code=$code body=${body.take(200)}"
+                    continue
+                }
+                okBody = body
+                break
+            } catch (e: Exception) {
+                lastError = "url=$candidateUrl error=${e.message ?: e.javaClass.simpleName}"
+            }
+        }
+
+        val body = okBody ?: run {
+            trace.add("MOTAK_FAILED $lastError")
+            return emptyList()
+        }
+
+        val root = JSONTokener(body).nextValue()
+        val array =
+            when (root) {
+                is JSONArray -> root
+                is JSONObject -> root.optJSONArray("data") ?: root.optJSONArray("result") ?: root.optJSONArray("\$values") ?: JSONArray()
+                else -> JSONArray()
+            }
+
+        val out = ArrayList<ApiMotaLite>(array.length())
+        for (i in 0 until array.length()) {
+            val obj = array.optJSONObject(i) ?: continue
+            val id = obj.optInt("id", obj.optInt("Id", -1)).takeIf { it > 0 } ?: continue
+            val name = obj.optString("izena", obj.optString("Izena", "")).trim()
+            if (name.isBlank()) continue
+            out.add(ApiMotaLite(id = id, izena = name))
+        }
+        return out
+    }
+
+    private fun fetchProduktuak(trace: ApiTrace): List<ApiProduktuaLite> {
+        val candidates =
+            apiBaseUrlCandidates().flatMap { baseUrl ->
+                listOf(
+                    "$baseUrl/Produktuak",
+                    "$baseUrl/produktuak"
+                )
+            }.distinct()
+
+        var lastError: String? = null
+        var okBody: String? = null
+        for (candidateUrl in candidates) {
+            try {
+                val (code, body) = httpGet(candidateUrl)
+                if (code !in 200..299) {
+                    lastError = "url=$candidateUrl code=$code body=${body.take(200)}"
+                    continue
+                }
+                okBody = body
+                break
+            } catch (e: Exception) {
+                lastError = "url=$candidateUrl error=${e.message ?: e.javaClass.simpleName}"
+            }
+        }
+
+        val body = okBody ?: run {
+            trace.add("PRODUKTUAK_FAILED $lastError")
+            return emptyList()
+        }
+
+        val root = JSONTokener(body).nextValue()
+        val array =
+            when (root) {
+                is JSONArray -> root
+                is JSONObject -> root.optJSONArray("data") ?: root.optJSONArray("result") ?: root.optJSONArray("\$values") ?: JSONArray()
+                else -> JSONArray()
+            }
+
+        val out = ArrayList<ApiProduktuaLite>(array.length())
+        for (i in 0 until array.length()) {
+            val obj = array.optJSONObject(i) ?: continue
+            val id = obj.optInt("id", obj.optInt("Id", -1)).takeIf { it > 0 } ?: continue
+            val name = obj.optString("izena", obj.optString("Izena", "")).trim().ifBlank { "Produktua $id" }
+            val motaId = obj.optInt("motaId", obj.optInt("MotaId", -1)).takeIf { it > 0 } ?: 0
+            val prezioa = obj.optDouble("prezioa", obj.optDouble("Prezioa", 0.0))
+            out.add(ApiProduktuaLite(id = id, izena = name, motaId = motaId, prezioa = prezioa))
+        }
+        return out
+    }
+
+    private fun fetchMahaiak(trace: ApiTrace): List<ApiMahaiaLite> {
+        val candidates =
+            apiBaseUrlCandidates().flatMap { baseUrl ->
+                listOf(
+                    "$baseUrl/Mahaiak",
+                    "$baseUrl/mahaiak"
+                )
+            }.distinct()
+
+        var lastError: String? = null
+        var okBody: String? = null
+        for (candidateUrl in candidates) {
+            try {
+                val (code, body) = httpGet(candidateUrl)
+                if (code !in 200..299) {
+                    lastError = "url=$candidateUrl code=$code body=${body.take(200)}"
+                    continue
+                }
+                okBody = body
+                break
+            } catch (e: Exception) {
+                lastError = "url=$candidateUrl error=${e.message ?: e.javaClass.simpleName}"
+            }
+        }
+
+        val body = okBody ?: run {
+            trace.add("MAHAIAK_SIMPLE_FAILED $lastError")
+            return emptyList()
+        }
+
+        val root = JSONTokener(body).nextValue()
+        val array =
+            when (root) {
+                is JSONArray -> root
+                is JSONObject -> root.optJSONArray("data") ?: root.optJSONArray("result") ?: root.optJSONArray("\$values") ?: JSONArray()
+                else -> JSONArray()
+            }
+
+        val out = ArrayList<ApiMahaiaLite>(array.length())
+        for (i in 0 until array.length()) {
+            val obj = array.optJSONObject(i) ?: continue
+            val id = obj.optInt("id", obj.optInt("Id", -1)).takeIf { it > 0 } ?: continue
+            val zenbakia = obj.optInt("zenbakia", obj.optInt("Zenbakia", id))
+            out.add(ApiMahaiaLite(id = id, zenbakia = zenbakia))
+        }
+        return out
+    }
+
+    private fun fetchErreserbak(trace: ApiTrace): List<ApiErreserbaLite> {
+        val candidates =
+            apiBaseUrlCandidates().flatMap { baseUrl ->
+                listOf(
+                    "$baseUrl/Erreserbak",
+                    "$baseUrl/erreserbak"
+                )
+            }.distinct()
+
+        var lastError: String? = null
+        var okBody: String? = null
+        for (candidateUrl in candidates) {
+            try {
+                val (code, body) = httpGet(candidateUrl)
+                if (code !in 200..299) {
+                    lastError = "url=$candidateUrl code=$code body=${body.take(200)}"
+                    continue
+                }
+                okBody = body
+                break
+            } catch (e: Exception) {
+                lastError = "url=$candidateUrl error=${e.message ?: e.javaClass.simpleName}"
+            }
+        }
+
+        val body = okBody ?: run {
+            trace.add("ERRESERBAK_SIMPLE_FAILED $lastError")
+            return emptyList()
+        }
+
+        val root = JSONTokener(body).nextValue()
+        val array =
+            when (root) {
+                is JSONArray -> root
+                is JSONObject -> root.optJSONArray("data") ?: root.optJSONArray("result") ?: root.optJSONArray("\$values") ?: JSONArray()
+                else -> JSONArray()
+            }
+
+        val out = ArrayList<ApiErreserbaLite>(array.length())
+        for (i in 0 until array.length()) {
+            val obj = array.optJSONObject(i) ?: continue
+            val id = obj.optInt("id", obj.optInt("Id", -1)).takeIf { it > 0 } ?: continue
+            val egunaOrdua = obj.optString("egunaOrdua", obj.optString("EgunaOrdua", "")).trim().ifBlank { null }
+            val bezeroIzena = obj.optString("bezeroIzena", obj.optString("BezeroIzena", "")).trim().ifBlank { null }
+            val pertsonaKopurua = obj.optInt("pertsonaKopurua", obj.optInt("PertsonaKopurua", -1)).takeIf { it >= 0 }
+            val mahaiakId = obj.optInt("mahaiakId", obj.optInt("MahaiakId", -1)).takeIf { it > 0 } ?: continue
+            val ordainduta = obj.optInt("ordainduta", obj.optInt("Ordainduta", 0))
+            out.add(
+                ApiErreserbaLite(
+                    id = id,
+                    egunaOrdua = egunaOrdua,
+                    bezeroIzena = bezeroIzena,
+                    pertsonaKopurua = pertsonaKopurua,
+                    mahaiakId = mahaiakId,
+                    ordainduta = ordainduta
+                )
+            )
+        }
+        return out
+    }
+
+    private fun fetchEskariakByErreserba(erreserbaId: Int, trace: ApiTrace): List<ApiEskariaLite> {
+        val candidates =
+            apiBaseUrlCandidates().flatMap { baseUrl ->
+                listOf(
+                    "$baseUrl/Eskariak/erreserba/$erreserbaId",
+                    "$baseUrl/eskariak/erreserba/$erreserbaId"
+                )
+            }.distinct()
+
+        var lastError: String? = null
+        var okBody: String? = null
+        for (candidateUrl in candidates) {
+            try {
+                val (code, body) = httpGet(candidateUrl)
+                if (code !in 200..299) {
+                    lastError = "url=$candidateUrl code=$code body=${body.take(200)}"
+                    continue
+                }
+                okBody = body
+                break
+            } catch (e: Exception) {
+                lastError = "url=$candidateUrl error=${e.message ?: e.javaClass.simpleName}"
+            }
+        }
+
+        val body = okBody ?: run {
+            trace.add("ESKARIAK_FAILED erreserbaId=$erreserbaId $lastError")
+            return emptyList()
+        }
+
+        val root = JSONTokener(body).nextValue()
+        val array =
+            when (root) {
+                is JSONArray -> root
+                is JSONObject -> root.optJSONArray("data") ?: root.optJSONArray("result") ?: root.optJSONArray("\$values") ?: JSONArray()
+                else -> JSONArray()
+            }
+
+        val out = ArrayList<ApiEskariaLite>(array.length())
+        for (i in 0 until array.length()) {
+            val obj = array.optJSONObject(i) ?: continue
+            val id = obj.optInt("id", obj.optInt("Id", -1)).takeIf { it > 0 } ?: continue
+            val eId = obj.optInt("erreserbaId", obj.optInt("ErreserbaId", -1)).takeIf { it > 0 } ?: erreserbaId
+            val prezioa = obj.optDouble("prezioa", obj.optDouble("Prezioa", 0.0))
+            val egoera = obj.optString("egoera", obj.optString("Egoera", "")).trim().ifBlank { null }
+            val langileakId =
+                obj.optInt("erreserbakLangileakId", obj.optInt("ErreserbakLangileakId", obj.optInt("erreserbak_langileak_id", obj.optInt("Erreserbak_Langileak_Id", -1))))
+                    .takeIf { it > 0 }
+            val mahaiakId =
+                obj.optInt("erreserbakMahaiakId", obj.optInt("ErreserbakMahaiakId", obj.optInt("erreserbak_mahaiak_id", obj.optInt("Erreserbak_Mahaiak_Id", -1))))
+                    .takeIf { it > 0 }
+            val prodArr =
+                obj.optJSONArray("produktuak")
+                    ?: obj.optJSONArray("Produktuak")
+                    ?: obj.optJSONArray("eskariakHasProduktuak")
+                    ?: obj.optJSONArray("EskariakHasProduktuak")
+                    ?: obj.optJSONArray("eskariak_has_produktuak")
+                    ?: obj.optJSONArray("data")
+                    ?: obj.optJSONArray("result")
+                    ?: obj.optJSONArray("\$values")
+                    ?: JSONArray()
+
+            val produktuak = ArrayList<ApiEskariaProduktuaLite>(prodArr.length())
+            for (j in 0 until prodArr.length()) {
+                val pObj = prodArr.optJSONObject(j) ?: continue
+                val pId =
+                    pObj.optInt(
+                        "produktuaId",
+                        pObj.optInt(
+                            "ProduktuaId",
+                            pObj.optInt("produktuakId", pObj.optInt("ProduktuakId", pObj.optInt("produktuak_id", pObj.optInt("Produktuak_Id", -1))))
+                        )
+                    ).takeIf { it > 0 } ?: continue
+                val kantitatea = pObj.optInt("kantitatea", pObj.optInt("Kantitatea", 0)).coerceAtLeast(0)
+                val pPrezioa = pObj.optDouble("prezioa", pObj.optDouble("Prezioa", 0.0))
+                val pName = pObj.optString("produktuaIzena", pObj.optString("ProduktuaIzena", "")).trim().ifBlank { null }
+                produktuak.add(ApiEskariaProduktuaLite(produktuaId = pId, kantitatea = kantitatea, prezioa = pPrezioa, produktuaIzena = pName))
+            }
+            out.add(
+                ApiEskariaLite(
+                    id = id,
+                    erreserbaId = eId,
+                    prezioa = prezioa,
+                    egoera = egoera,
+                    produktuak = produktuak,
+                    erreserbakLangileakId = langileakId,
+                    erreserbakMahaiakId = mahaiakId
+                )
+            )
+        }
+        return out
+    }
+
+    private fun isEskariaDone(egoera: String?): Boolean {
+        val e = egoera?.trim().orEmpty().lowercase()
+        if (e.isBlank()) return false
+        return e == "prest" || e.contains("prest") || e == "entregatua" || e.contains("entrega")
     }
 
     private data class MahaiFallbackSeed(
@@ -263,12 +762,14 @@ class KitchenOrdersViewModel : ViewModel() {
 
             groups.add(
                 KitchenOrderGroup(
+                    eskariaId = null,
                     erreserbaId = s.erreserbaId,
                     txanda = currentTxanda,
                     customerName = null,
                     personCount = s.personCount,
                     tablesLabel = s.tablesLabel,
                     fakturaId = fakturaId,
+                    eskariaEgoera = null,
                     komandak = komandak.sortedWith(compareBy<KitchenKomanda> { it.egoera }.thenBy { it.id })
                 )
             )
@@ -1041,7 +1542,73 @@ class KitchenOrdersViewModel : ViewModel() {
         return info
     }
 
+    private fun markEskariaPrest(eskariaId: Int) {
+        val eskaria = fetchEskariaById(eskariaId)
+        if (isEskariaDone(eskaria.egoera)) return
+        val produktuakArray = JSONArray()
+        for (p in eskaria.produktuak) {
+            produktuakArray.put(
+                JSONObject()
+                    .put("ProduktuaId", p.produktuaId)
+                    .put("Kantitatea", p.kantitatea)
+                    .put("Prezioa", p.prezioa)
+            )
+        }
+        val fullPayload =
+            JSONObject()
+                .put("Id", eskaria.id)
+                .put("EskariakId", eskaria.id)
+                .put("ErreserbaId", eskaria.erreserbaId)
+                .put("ErreserbakId", eskaria.erreserbaId)
+                .put("Prezioa", eskaria.prezioa)
+                .put("Egoera", "Prest")
+                .put("Produktuak", produktuakArray)
+                .also { obj ->
+                    eskaria.erreserbakLangileakId?.let {
+                        obj.put("ErreserbakLangileakId", it)
+                        obj.put("LangileaId", it)
+                    }
+                    eskaria.erreserbakMahaiakId?.let {
+                        obj.put("ErreserbakMahaiakId", it)
+                        obj.put("MahaiakId", it)
+                    }
+                }
+
+        val statusPayload =
+            JSONObject()
+                .put("Egoera", "Prest")
+                .put("egoera", "Prest")
+
+        var lastError: String? = null
+        for (baseUrl in apiBaseUrlCandidates()) {
+            val base = baseUrl.trimEnd('/')
+            val endpoints =
+                listOf(
+                    "$base/Eskariak/$eskariaId",
+                    "$base/eskariak/$eskariaId",
+                    "$base/Eskariak/$eskariaId/egoera",
+                    "$base/eskariak/$eskariaId/egoera"
+                )
+            for (url in endpoints) {
+                try {
+                    val payload = if (url.endsWith("/egoera")) statusPayload else fullPayload
+                    val (code, body) = httpPutJson(url, payload)
+                    if (code in 200..299) return
+                    lastError = "url=$url code=$code body=${body.take(200)}"
+                } catch (e: Exception) {
+                    lastError = "url=$url error=${e.message ?: e.javaClass.simpleName}"
+                }
+            }
+        }
+        throw IllegalStateException("Ezin izan da eskaria PREST jarri ($lastError)")
+    }
+
     private fun patchKomandaEgoera(komandaId: Int, egoera: Boolean) {
+        val eskariaId = komandaToEskariaId[komandaId]
+        if (eskariaId != null) {
+            return
+        }
+
         val candidates =
             apiBaseUrlCandidates().flatMap { baseUrl ->
                 listOf(
@@ -1088,6 +1655,101 @@ class KitchenOrdersViewModel : ViewModel() {
         }
 
         throw IllegalStateException("Ezin izan da egoera eguneratu ($lastError)")
+    }
+
+    private fun fetchEskariaById(eskariaId: Int): ApiEskariaLite {
+        val candidates =
+            apiBaseUrlCandidates().flatMap { baseUrl ->
+                listOf(
+                    "${baseUrl.trimEnd('/')}/Eskariak/$eskariaId",
+                    "${baseUrl.trimEnd('/')}/eskariak/$eskariaId"
+                )
+            }.distinct()
+
+        var lastError: String? = null
+        var okBody: String? = null
+        for (candidateUrl in candidates) {
+            try {
+                val (code, body) = httpGet(candidateUrl)
+                if (code !in 200..299) {
+                    lastError = "url=$candidateUrl code=$code body=${body.take(200)}"
+                    continue
+                }
+                okBody = body
+                break
+            } catch (e: Exception) {
+                lastError = "url=$candidateUrl error=${e.message ?: e.javaClass.simpleName}"
+            }
+        }
+
+        val body = okBody ?: throw IllegalStateException("Ezin izan da eskaria kargatu ($lastError)")
+        val obj = JSONTokener(body).nextValue() as? JSONObject ?: throw IllegalStateException("Ezin izan da eskaria kargatu (json)")
+
+        val id = obj.optInt("id", obj.optInt("Id", -1)).takeIf { it > 0 } ?: eskariaId
+        val erreserbaId = obj.optInt("erreserbaId", obj.optInt("ErreserbaId", -1)).takeIf { it > 0 } ?: -1
+        val prezioa = obj.optDouble("prezioa", obj.optDouble("Prezioa", 0.0))
+        val egoera = obj.optString("egoera", obj.optString("Egoera", "")).trim().ifBlank { null }
+        val langileakId =
+            obj.optInt("erreserbakLangileakId", obj.optInt("ErreserbakLangileakId", obj.optInt("erreserbak_langileak_id", obj.optInt("Erreserbak_Langileak_Id", -1))))
+                .takeIf { it > 0 }
+        val mahaiakId =
+            obj.optInt("erreserbakMahaiakId", obj.optInt("ErreserbakMahaiakId", obj.optInt("erreserbak_mahaiak_id", obj.optInt("Erreserbak_Mahaiak_Id", -1))))
+                .takeIf { it > 0 }
+
+        val prodsArr =
+            obj.optJSONArray("produktuak")
+                ?: obj.optJSONArray("Produktuak")
+                ?: obj.optJSONArray("eskariakHasProduktuak")
+                ?: obj.optJSONArray("EskariakHasProduktuak")
+                ?: obj.optJSONArray("eskariak_has_produktuak")
+                ?: obj.optJSONArray("data")
+                ?: obj.optJSONArray("result")
+                ?: obj.optJSONArray("\$values")
+                ?: JSONArray()
+
+        val produktuak = ArrayList<ApiEskariaProduktuaLite>(prodsArr.length())
+        for (j in 0 until prodsArr.length()) {
+            val pObj = prodsArr.optJSONObject(j) ?: continue
+            val pId =
+                pObj.optInt(
+                    "produktuaId",
+                    pObj.optInt(
+                        "ProduktuaId",
+                        pObj.optInt("produktuakId", pObj.optInt("ProduktuakId", pObj.optInt("produktuak_id", pObj.optInt("Produktuak_Id", -1))))
+                    )
+                ).takeIf { it > 0 } ?: continue
+            val kantitatea = pObj.optInt("kantitatea", pObj.optInt("Kantitatea", 0)).coerceAtLeast(0)
+            val pPrezioa = pObj.optDouble("prezioa", pObj.optDouble("Prezioa", 0.0))
+            val pName = pObj.optString("produktuaIzena", pObj.optString("ProduktuaIzena", "")).trim().ifBlank { null }
+            produktuak.add(ApiEskariaProduktuaLite(produktuaId = pId, kantitatea = kantitatea, prezioa = pPrezioa, produktuaIzena = pName))
+        }
+
+        return ApiEskariaLite(
+            id = id,
+            erreserbaId = erreserbaId,
+            prezioa = prezioa,
+            egoera = egoera,
+            produktuak = produktuak,
+            erreserbakLangileakId = langileakId,
+            erreserbakMahaiakId = mahaiakId
+        )
+    }
+
+    private fun httpPutJson(url: String, jsonBody: JSONObject): Pair<Int, String> {
+        val conn =
+            (URL(url).openConnection() as HttpURLConnection).apply {
+                requestMethod = "PUT"
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                setRequestProperty("Accept", "application/json")
+                doOutput = true
+                connectTimeout = 15000
+                readTimeout = 15000
+            }
+        conn.outputStream.use { os -> os.write(jsonBody.toString().toByteArray(Charsets.UTF_8)) }
+        val code = conn.responseCode
+        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+        val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+        return code to body
     }
 
     private fun httpGet(url: String): Pair<Int, String> {
@@ -1137,7 +1799,11 @@ class KitchenOrdersViewModel : ViewModel() {
             } else {
                 base
             }
-        return listOf(base, "$noApi/api").distinct()
+        return listOf(
+            base,
+            "$noApi/api",
+            "http://192.168.10.5:5000/api"
+        ).distinct()
     }
 
     private fun currentTxanda(): String {

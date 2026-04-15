@@ -1,5 +1,6 @@
 package com.example.osiskitchen.ui
 
+import android.content.res.Configuration
 import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,7 +14,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Refresh
@@ -40,11 +42,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.text.style.TextOverflow
@@ -126,46 +129,53 @@ fun KitchenOrdersScreen(
                 }
 
                 else -> {
-                    LazyColumn(
+                    val configuration = LocalConfiguration.current
+                    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+                    val columnCount = if (isLandscape) 3 else 2
+
+                    val sortedGroups =
+                        remember(uiState.groups) {
+                            uiState.groups.sortedWith(
+                                compareBy<KitchenOrderGroup> { group ->
+                                    val done = group.komandak.all { it.egoera } || isEgoeraDone(group.eskariaEgoera)
+                                    if (done) 1 else 0
+                                }.thenBy { it.eskariaId ?: it.erreserbaId }
+                            )
+                        }
+
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(columnCount),
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                            start = 16.dp,
-                            end = 16.dp,
-                            top = 12.dp,
-                            bottom = 12.dp
-                        ),
+                        contentPadding =
+                            androidx.compose.foundation.layout.PaddingValues(
+                                start = 16.dp,
+                                end = 16.dp,
+                                top = 12.dp,
+                                bottom = 12.dp
+                            ),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        items(uiState.groups) { group ->
+                        items(sortedGroups.size) { index ->
+                            val group = sortedGroups[index]
                             val reservaColor = Color(0xFF5B1C1C)
-                            data class CategoryColumn(val id: Int?, val label: String)
-
-                            val columns =
-                                run {
-                                    val distinct =
-                                        group.komandak
-                                            .mapNotNull { k ->
-                                                val id = k.kategoriaId ?: return@mapNotNull null
-                                                id to (k.kategoriaIzena?.takeIf { it.isNotBlank() } ?: "Kategoria $id")
-                                            }
-                                            .distinctBy { it.first }
-                                            .sortedBy { it.first }
-                                            .take(4)
-                                            .map { (id, label) -> CategoryColumn(id = id, label = label) }
-                                            .toMutableList()
-
-                                    while (distinct.size < 4) distinct.add(CategoryColumn(id = null, label = ""))
-                                    distinct
+                            val groupDone = group.komandak.all { it.egoera } || isEgoeraDone(group.eskariaEgoera)
+                            val groupAlpha = if (groupDone) 0.55f else 1f
+                            val cardContainer =
+                                if (groupDone) {
+                                    lerp(reservaColor, Color.White, 0.85f)
+                                } else {
+                                    MaterialTheme.colorScheme.surface
                                 }
 
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
                                 colors =
                                     CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.surface
+                                        containerColor = cardContainer
                                     )
                             ) {
-                                Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                                Column(modifier = Modifier.fillMaxWidth().padding(16.dp).alpha(groupAlpha)) {
                                     Surface(
                                         color = reservaColor,
                                         contentColor = Color.White,
@@ -173,7 +183,7 @@ fun KitchenOrdersScreen(
                                     ) {
                                         Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
                                             Text(
-                                                text = group.tablesLabel ?: "Erreserba ${group.erreserbaId}",
+                                                text = buildGroupTitle(group),
                                                 style = MaterialTheme.typography.titleMedium,
                                                 fontWeight = FontWeight.SemiBold,
                                                 maxLines = 1,
@@ -200,6 +210,12 @@ fun KitchenOrdersScreen(
                                                 } else {
                                                     Spacer(modifier = Modifier.weight(1f))
                                                 }
+                                                Text(
+                                                    text = egoeraLabel(group.eskariaEgoera, groupDone),
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                                Spacer(modifier = Modifier.width(10.dp))
                                                 val people = group.personCount
                                                 if (people != null) {
                                                     Text(
@@ -214,127 +230,90 @@ fun KitchenOrdersScreen(
 
                                     Spacer(modifier = Modifier.height(12.dp))
 
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                    ) {
-                                        columns.forEach { col ->
-                                            val komandas =
-                                                if (col.id == null) {
-                                                    emptyList()
-                                                } else {
-                                                    group.komandak
-                                                        .filter { it.kategoriaId == col.id }
-                                                        .sortedBy { it.id }
-                                                }
-
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                if (col.label.isNotBlank()) {
-                                                    val categoryBg = lerp(Color(0xFF5B1C1C), Color.White, 0.25f)
-                                                    Surface(
-                                                        color = categoryBg,
-                                                        contentColor = Color.White,
-                                                        shape = RoundedCornerShape(10.dp),
-                                                        modifier = Modifier.fillMaxWidth()
+                                    val komandas = group.komandak.sortedBy { it.id }
+                                    komandas.forEach { komanda ->
+                                        val isUpdating = uiState.updatingKomandaIds.contains(komanda.id)
+                                        Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = komanda.plateraIzena,
+                                                    style = MaterialTheme.typography.bodyLarge,
+                                                    fontWeight = FontWeight.Medium,
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                val notes = komanda.oharrak
+                                                val hasNotes =
+                                                    !notes.isNullOrBlank() && !notes.equals("null", ignoreCase = true)
+                                                if (hasNotes) {
+                                                    IconButton(
+                                                        onClick = {
+                                                            noteDialog =
+                                                                NoteDialogData(
+                                                                    title = komanda.plateraIzena,
+                                                                    note = notes
+                                                                )
+                                                        },
+                                                        modifier = Modifier.width(32.dp).height(32.dp)
                                                     ) {
-                                                        Text(
-                                                            text = col.label,
-                                                            style = MaterialTheme.typography.titleSmall,
-                                                            fontWeight = FontWeight.SemiBold,
-                                                            maxLines = 1,
-                                                            overflow = TextOverflow.Ellipsis,
-                                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                                        Icon(
+                                                            imageVector = Icons.Filled.ErrorOutline,
+                                                            contentDescription = "Oharra ikusi",
+                                                            tint = Color(0xFF5B1C1C)
                                                         )
                                                     }
-                                                    Spacer(modifier = Modifier.height(8.dp))
                                                 }
-
-                                                komandas.forEach { komanda ->
-                                                    val isUpdating = uiState.updatingKomandaIds.contains(komanda.id)
-                                                    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-                                                        Row(
-                                                            modifier = Modifier.fillMaxWidth(),
-                                                            verticalAlignment = Alignment.CenterVertically
-                                                        ) {
-                                                            Text(
-                                                                text = komanda.plateraIzena,
-                                                                style = MaterialTheme.typography.bodyMedium,
-                                                                fontWeight = FontWeight.Medium,
-                                                                maxLines = 2,
-                                                                overflow = TextOverflow.Ellipsis,
-                                                                modifier = Modifier.weight(1f)
-                                                            )
-                                                            Spacer(modifier = Modifier.width(8.dp))
-                                                            val notes = komanda.oharrak
-                                                            val hasNotes =
-                                                                !notes.isNullOrBlank() && !notes.equals("null", ignoreCase = true)
-                                                            if (hasNotes) {
-                                                                IconButton(
-                                                                    onClick = {
-                                                                        noteDialog =
-                                                                            NoteDialogData(
-                                                                                title = komanda.plateraIzena,
-                                                                                note = notes
-                                                                            )
-                                                                    },
-                                                                    modifier = Modifier.width(32.dp).height(32.dp)
-                                                                ) {
-                                                                    Icon(
-                                                                        imageVector = Icons.Filled.ErrorOutline,
-                                                                        contentDescription = "Oharra ikusi",
-                                                                        tint = Color(0xFF5B1C1C)
-                                                                    )
-                                                                }
-                                                            }
-                                                            Text(
-                                                                text = "x${komanda.kopurua}",
-                                                                style = MaterialTheme.typography.headlineSmall,
-                                                                fontWeight = FontWeight.SemiBold,
-                                                                color = MaterialTheme.colorScheme.onSurface
-                                                            )
-                                                        }
-                                                        Spacer(modifier = Modifier.height(8.dp))
-                                                        val baseButtonColor = Color(0xFF5B1C1C)
-                                                        val doneBackground = lerp(baseButtonColor, Color.White, 0.65f)
-                                                        val buttonContainerColor =
-                                                            if (komanda.egoera) doneBackground else baseButtonColor
-                                                        val buttonContentColor =
-                                                            if (komanda.egoera) Color.Black else Color.White
-                                                        FilledTonalButton(
-                                                            onClick = { viewModel.setKomandaEgoera(komanda.id, !komanda.egoera) },
-                                                            enabled = !isUpdating,
-                                                            modifier = Modifier.fillMaxWidth().height(64.dp),
-                                                            colors =
-                                                                ButtonDefaults.filledTonalButtonColors(
-                                                                    containerColor = buttonContainerColor,
-                                                                    contentColor = buttonContentColor,
-                                                                    disabledContainerColor = buttonContainerColor.copy(alpha = 0.5f),
-                                                                    disabledContentColor = buttonContentColor.copy(alpha = 0.65f)
-                                                                )
-                                                        ) {
-                                                            Row(
-                                                                modifier = Modifier.fillMaxWidth(),
-                                                                verticalAlignment = Alignment.CenterVertically,
-                                                                horizontalArrangement = Arrangement.Center
-                                                            ) {
-                                                                if (isUpdating) {
-                                                                    CircularProgressIndicator(
-                                                                        modifier = Modifier.size(22.dp),
-                                                                        strokeWidth = 3.dp,
-                                                                        color = buttonContentColor
-                                                                    )
-                                                                    Spacer(modifier = Modifier.width(12.dp))
-                                                                }
-                                                                Text(
-                                                                    text = if (komanda.egoera) "Atzera" else "Egina",
-                                                                    style = MaterialTheme.typography.titleLarge,
-                                                                    fontWeight = FontWeight.SemiBold,
-                                                                    maxLines = 1,
-                                                                    overflow = TextOverflow.Ellipsis
-                                                                )
-                                                            }
-                                                        }
+                                                Text(
+                                                    text = "x${komanda.kopurua}",
+                                                    style = MaterialTheme.typography.titleMedium,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.height(10.dp))
+                                            val baseButtonColor = Color(0xFF5B1C1C)
+                                            val doneBackground = lerp(baseButtonColor, Color.White, 0.65f)
+                                            val buttonContainerColor =
+                                                if (komanda.egoera) doneBackground else baseButtonColor
+                                            val buttonContentColor =
+                                                if (komanda.egoera) Color.Black else Color.White
+                                            FilledTonalButton(
+                                                onClick = { viewModel.setKomandaEgoera(komanda.id, !komanda.egoera) },
+                                                enabled = !isUpdating && !isEgoeraDone(group.eskariaEgoera),
+                                                modifier = Modifier.fillMaxWidth().height(58.dp),
+                                                colors =
+                                                    ButtonDefaults.filledTonalButtonColors(
+                                                        containerColor = buttonContainerColor,
+                                                        contentColor = buttonContentColor,
+                                                        disabledContainerColor = buttonContainerColor.copy(alpha = 0.5f),
+                                                        disabledContentColor = buttonContentColor.copy(alpha = 0.65f)
+                                                    )
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.Center
+                                                ) {
+                                                    if (isUpdating) {
+                                                        CircularProgressIndicator(
+                                                            modifier = Modifier.size(22.dp),
+                                                            strokeWidth = 3.dp,
+                                                            color = buttonContentColor
+                                                        )
+                                                        Spacer(modifier = Modifier.width(12.dp))
                                                     }
+                                                    Text(
+                                                        text = if (komanda.egoera) "Atzera" else "Egina",
+                                                        style = MaterialTheme.typography.titleLarge,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
                                                 }
                                             }
                                         }
@@ -347,4 +326,34 @@ fun KitchenOrdersScreen(
             }
         }
     }
+}
+
+private fun isEgoeraDone(egoera: String?): Boolean {
+    val e = egoera?.trim().orEmpty().lowercase()
+    if (e.isBlank()) return false
+    return e.contains("prest") || e.contains("entrega")
+}
+
+private fun egoeraLabel(egoera: String?, groupDone: Boolean): String {
+    val e = egoera?.trim().orEmpty().lowercase()
+    return when {
+        e.contains("entrega") -> "Entregatua"
+        e.contains("prest") -> "Prest"
+        groupDone -> "Prest"
+        else -> "Bidalita"
+    }
+}
+
+private fun buildGroupTitle(group: KitchenOrderGroup): String {
+    val mesa = formatMahaiaLabel(group.tablesLabel) ?: "Erreserba ${group.erreserbaId}"
+    val id = group.eskariaId ?: group.erreserbaId
+    return "$mesa · #$id Eskaera"
+}
+
+private fun formatMahaiaLabel(raw: String?): String? {
+    val s = raw?.trim().orEmpty()
+    if (s.isBlank()) return null
+    val m = Regex("""\bMahai\s*(\d+)\b""", RegexOption.IGNORE_CASE).find(s) ?: return s
+    val num = m.groupValues.getOrNull(1)?.toIntOrNull() ?: return s
+    return "$num. Mahaia"
 }
