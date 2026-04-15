@@ -1,5 +1,6 @@
 package com.example.osiskitchen.ui
 
+import android.content.res.Configuration
 import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -11,9 +12,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -23,16 +26,15 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -42,10 +44,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
+import com.example.osiskitchen.R
 
 @Composable
 fun KitchenPlatosStockScreen(
@@ -59,7 +66,6 @@ fun KitchenPlatosStockScreen(
     var step by remember { mutableStateOf(1) }
     var query by remember { mutableStateOf("") }
     var selectedCategoryId by remember { mutableStateOf<Int?>(null) }
-    var categoryMenuExpanded by remember { mutableStateOf(false) }
     var stockDialogPlato by remember { mutableStateOf<KitchenPlatoStock?>(null) }
     var stockDialogText by remember { mutableStateOf("") }
 
@@ -73,16 +79,51 @@ fun KitchenPlatosStockScreen(
     }
 
     val categories =
-    remember(uiState.platos) {
-        uiState.platos
-            .mapNotNull { p ->
-                val id = p.kategoriaId ?: return@mapNotNull null
-                val label = p.kategoriaIzena?.trim().takeUnless { it.isNullOrBlank() } ?: "Kategoria $id"
-                id to label
-            }
-            .distinctBy { it.first }
-            .sortedBy { it.first }
-    }
+        remember(uiState.platos) {
+            uiState.platos
+                .mapNotNull { p ->
+                    val id = p.kategoriaId ?: return@mapNotNull null
+                    val label = p.kategoriaIzena?.trim().takeUnless { it.isNullOrBlank() } ?: "Kategoria $id"
+                    id to label
+                }
+                .distinctBy { it.first }
+                .sortedBy { it.first }
+        }
+
+    val categoryButtons =
+        remember(categories) {
+            val primeroId = categories.firstOrNull { motaOrderKey(it.second) == 0 }?.first
+            val segundoId = categories.firstOrNull { motaOrderKey(it.second) == 1 }?.first
+            val postreId = categories.firstOrNull { motaOrderKey(it.second) == 2 }?.first
+            val bebidasId = categories.firstOrNull { motaOrderKey(it.second) == 3 }?.first
+            listOf(
+                CategoryButtonModel(
+                    id = null,
+                    label = "Dena",
+                    iconResId = null
+                ),
+                CategoryButtonModel(
+                    id = primeroId,
+                    label = "",
+                    iconResId = R.drawable.primero
+                ),
+                CategoryButtonModel(
+                    id = segundoId,
+                    label = "",
+                    iconResId = R.drawable.segundo
+                ),
+                CategoryButtonModel(
+                    id = postreId,
+                    label = "",
+                    iconResId = R.drawable.postre
+                ),
+                CategoryButtonModel(
+                    id = bebidasId,
+                    label = "",
+                    iconResId = R.drawable.bebidas
+                )
+            )
+        }
 
     val filtered =
         remember(uiState.platos, query, selectedCategoryId) {
@@ -184,46 +225,54 @@ fun KitchenPlatosStockScreen(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
+                val orange = remember { Color(0xFFF3863A) }
                 Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                            text = "Kategoria:",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Box {
-                        TextButton(onClick = { categoryMenuExpanded = true }) {
-                            val selectedLabel = categories.firstOrNull { it.first == selectedCategoryId }?.second
-                            Text(text = selectedLabel ?: "Denak")
-                        }
-                        DropdownMenu(
-                                expanded = categoryMenuExpanded,
-                                onDismissRequest = { categoryMenuExpanded = false }
+                    categoryButtons.forEach { model ->
+                        val selected = selectedCategoryId == model.id
+                        val enabled = model.iconResId == null || model.id != null
+                        Surface(
+                            color = if (selected) orange else MaterialTheme.colorScheme.surface,
+                            contentColor = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
+                            shape = RoundedCornerShape(18.dp),
+                            modifier =
+                                Modifier
+                                    .weight(1f)
+                                    .height(56.dp)
+                                    .clip(RoundedCornerShape(18.dp))
+                                    .clickable(enabled = enabled) { selectedCategoryId = model.id }
                         ) {
-                            DropdownMenuItem(
-                                    text = { Text(text = "Denak") },
-                                    onClick = {
-                                        selectedCategoryId = null
-                                        categoryMenuExpanded = false
-                                    }
-                            )
-                            categories.forEach { (catId, catLabel) ->
-                                DropdownMenuItem(
-                                        text = { Text(text = catLabel) },
-                                        onClick = {
-                                            selectedCategoryId = catId
-                                            categoryMenuExpanded = false
-                                        }
-                                )
+                            Row(
+                                modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                if (model.iconResId != null) {
+                                    Icon(
+                                        painter = painterResource(model.iconResId),
+                                        contentDescription = null,
+                                        tint = if (selected) Color.White else orange,
+                                        modifier = Modifier.size(40.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
+                                if (model.label.isNotBlank()) {
+                                    Text(
+                                        text = model.label,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1
+                                    )
+                                }
                             }
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
                 if (uiState.isLoading && uiState.platos.isEmpty()) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -243,79 +292,104 @@ fun KitchenPlatosStockScreen(
                     return@Surface
                 }
 
-                LazyColumn(
+                val configuration = LocalConfiguration.current
+                val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+                val columns = if (isLandscape) 3 else 2
+                val cardBaseColor = lerp(orange, Color.White, 0.82f)
+
+                LazyVerticalGrid(
+                        columns = GridCells.Fixed(columns),
                         modifier = Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    items(filtered) { plato ->
+                    items(filtered, key = { it.id }) { plato ->
                         val isUpdating = uiState.updatingIds.contains(plato.id)
+                        val cardColor = if (isUpdating) cardBaseColor.copy(alpha = 0.75f) else cardBaseColor
+                        val stockColor = if (plato.stock < 5) Color.Red else MaterialTheme.colorScheme.onSurface
                         Card(
                                 modifier = Modifier.fillMaxWidth(),
                                 colors =
                                         CardDefaults.cardColors(
-                                                containerColor = MaterialTheme.colorScheme.surface
+                                                containerColor = cardColor
                                         )
                         ) {
-                            Row(
+                            Column(
                                     modifier = Modifier.fillMaxWidth().padding(14.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                            text = plato.izena,
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            fontWeight = FontWeight.Medium
-                                    )
-                                    val cat = plato.kategoriaIzena
-                                    if (!cat.isNullOrBlank()) {
-                                        Spacer(modifier = Modifier.height(2.dp))
+                                Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.Top,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
                                         Text(
-                                                text = cat,
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                text = plato.izena,
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                fontWeight = FontWeight.Medium,
+                                                maxLines = 2
                                         )
+                                        val cat = plato.kategoriaIzena
+                                        if (!cat.isNullOrBlank()) {
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Text(
+                                                    text = cat,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 1
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        Text(
+                                                text = plato.stock.toString(),
+                                                style = MaterialTheme.typography.headlineSmall,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = stockColor,
+                                                modifier =
+                                                        Modifier.clickable(
+                                                                enabled = !isUpdating
+                                                        ) {
+                                                            stockDialogPlato = plato
+                                                            stockDialogText = plato.stock.toString()
+                                                        }
+                                        )
+                                        if (isUpdating) {
+                                            Spacer(modifier = Modifier.height(6.dp))
+                                            CircularProgressIndicator(
+                                                    modifier = Modifier.size(18.dp),
+                                                    strokeWidth = 2.dp
+                                            )
+                                        }
                                     }
                                 }
 
-                                if (isUpdating) {
-                                    CircularProgressIndicator(
-                                            modifier = Modifier.width(26.dp).height(26.dp),
-                                            strokeWidth = 3.dp
-                                    )
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                }
-
-                                IconButton(
-                                        enabled = !isUpdating && plato.stock - step >= 0,
-                                        onClick = { viewModel.adjustStock(plato.id, -step) }
+                                Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center
                                 ) {
-                                    Icon(
-                                            imageVector = Icons.Filled.Remove,
-                                            contentDescription = "Stock-a kendu"
-                                    )
-                                }
-
-                                Text(
-                                        text = plato.stock.toString(),
-                                        style = MaterialTheme.typography.titleMedium,
-                                        modifier =
-                                                Modifier.width(56.dp).clickable(
-                                                                enabled = !isUpdating
-                                                        ) {
-                                                    stockDialogPlato = plato
-                                                    stockDialogText = plato.stock.toString()
-                                                },
-                                        fontWeight = FontWeight.SemiBold
-                                )
-
-                                IconButton(
-                                        enabled = !isUpdating,
-                                        onClick = { viewModel.adjustStock(plato.id, step) }
-                                ) {
-                                    Icon(
-                                            imageVector = Icons.Filled.Add,
-                                            contentDescription = "Stock-a gehitu"
-                                    )
+                                    IconButton(
+                                            enabled = !isUpdating && plato.stock - step >= 0,
+                                            onClick = { viewModel.adjustStock(plato.id, -step) }
+                                    ) {
+                                        Icon(
+                                                imageVector = Icons.Filled.Remove,
+                                                contentDescription = "Stock-a kendu"
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(16.dp))
+                                    IconButton(
+                                            enabled = !isUpdating,
+                                            onClick = { viewModel.adjustStock(plato.id, step) }
+                                    ) {
+                                        Icon(
+                                                imageVector = Icons.Filled.Add,
+                                                contentDescription = "Stock-a gehitu"
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -323,6 +397,23 @@ fun KitchenPlatosStockScreen(
                 }
             }
         }
+    }
+}
+
+private data class CategoryButtonModel(
+    val id: Int?,
+    val label: String,
+    val iconResId: Int?
+)
+
+private fun motaOrderKey(mota: String): Int {
+    val lower = mota.trim().lowercase()
+    return when {
+        lower.contains("prim") || lower.contains("lehen") -> 0
+        lower.contains("segu") || lower.contains("big") -> 1
+        lower.contains("post") -> 2
+        lower.contains("bebi") || lower.contains("edar") -> 3
+        else -> 99
     }
 }
 
@@ -374,6 +465,7 @@ fun KitchenIngredientesStockScreen(
             Column(
                     modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp)
             ) {
+                val orange = remember { Color(0xFFF3863A) }
                 stockDialogIngrediente?.let { ingrediente ->
                     AlertDialog(
                             onDismissRequest = { stockDialogIngrediente = null },
@@ -461,92 +553,99 @@ fun KitchenIngredientesStockScreen(
                     return@Surface
                 }
 
-                LazyColumn(
+                val configuration = LocalConfiguration.current
+                val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+                val columns = if (isLandscape) 3 else 2
+                val cardBaseColor = lerp(orange, Color.White, 0.82f)
+
+                LazyVerticalGrid(
+                        columns = GridCells.Fixed(columns),
                         modifier = Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    items(filtered) { ingrediente ->
+                    items(filtered, key = { it.id }) { ingrediente ->
                         val isUpdating = uiState.updatingIds.contains(ingrediente.id)
-                        val isLow = ingrediente.stock <= ingrediente.gutxienekoStock
-                        val containerColor =
-                                if (ingrediente.eskatu) {
-                                    MaterialTheme.colorScheme.tertiaryContainer
-                                } else if (isLow) {
-                                    MaterialTheme.colorScheme.errorContainer
-                                } else {
-                                    MaterialTheme.colorScheme.surface
-                                }
+                        val cardColor = if (isUpdating) cardBaseColor.copy(alpha = 0.75f) else cardBaseColor
+                        val stockColor = if (ingrediente.stock < 5) Color.Red else MaterialTheme.colorScheme.onSurface
 
                         Card(
                                 modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(containerColor = containerColor)
+                                colors = CardDefaults.cardColors(containerColor = cardColor)
                         ) {
-                            Row(
+                            Column(
                                     modifier = Modifier.fillMaxWidth().padding(14.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                            text = ingrediente.izena,
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            fontWeight = FontWeight.Medium
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                            text = "Gutx: ${ingrediente.gutxienekoStock}",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-
-                                if (isUpdating) {
-                                    CircularProgressIndicator(
-                                            modifier = Modifier.width(26.dp).height(26.dp),
-                                            strokeWidth = 3.dp
-                                    )
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                }
-
-                                IconButton(
-                                        enabled = !isUpdating && ingrediente.stock - step >= 0,
-                                        onClick = { viewModel.adjustStock(ingrediente.id, -step) }
+                                Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.Top,
+                                        horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Icon(
-                                            imageVector = Icons.Filled.Remove,
-                                            contentDescription = "Stock-a kendu"
-                                    )
-                                }
-
-                                Text(
-                                        text = ingrediente.stock.toString(),
-                                        style = MaterialTheme.typography.titleMedium,
-                                        modifier =
-                                                Modifier.width(56.dp).clickable(
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                                text = ingrediente.izena,
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                fontWeight = FontWeight.Medium,
+                                                maxLines = 2
+                                        )
+                                        Text(
+                                                text = "Gutx: ${ingrediente.gutxienekoStock}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        Text(
+                                                text = ingrediente.stock.toString(),
+                                                style = MaterialTheme.typography.headlineSmall,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = stockColor,
+                                                modifier =
+                                                        Modifier.clickable(
                                                                 enabled = !isUpdating
                                                         ) {
-                                                    stockDialogIngrediente = ingrediente
-                                                    stockDialogText = ingrediente.stock.toString()
-                                                },
-                                        fontWeight = FontWeight.SemiBold
-                                )
-
-                                IconButton(
-                                        enabled = !isUpdating,
-                                        onClick = { viewModel.adjustStock(ingrediente.id, step) }
-                                ) {
-                                    Icon(
-                                            imageVector = Icons.Filled.Add,
-                                            contentDescription = "Stock-a gehitu"
-                                    )
+                                                            stockDialogIngrediente = ingrediente
+                                                            stockDialogText = ingrediente.stock.toString()
+                                                        }
+                                        )
+                                        if (isUpdating) {
+                                            Spacer(modifier = Modifier.height(6.dp))
+                                            CircularProgressIndicator(
+                                                    modifier = Modifier.size(18.dp),
+                                                    strokeWidth = 2.dp
+                                            )
+                                        }
+                                    }
                                 }
 
-                                Spacer(modifier = Modifier.width(10.dp))
-
-                                Switch(
-                                        checked = ingrediente.eskatu,
-                                        enabled = !isUpdating,
-                                        onCheckedChange = { viewModel.toggleEskatu(ingrediente.id) }
-                                )
+                                Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center
+                                ) {
+                                    IconButton(
+                                            enabled = !isUpdating && ingrediente.stock - step >= 0,
+                                            onClick = { viewModel.adjustStock(ingrediente.id, -step) }
+                                    ) {
+                                        Icon(
+                                                imageVector = Icons.Filled.Remove,
+                                                contentDescription = "Stock-a kendu"
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(16.dp))
+                                    IconButton(
+                                            enabled = !isUpdating,
+                                            onClick = { viewModel.adjustStock(ingrediente.id, step) }
+                                    ) {
+                                        Icon(
+                                                imageVector = Icons.Filled.Add,
+                                                contentDescription = "Stock-a gehitu"
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

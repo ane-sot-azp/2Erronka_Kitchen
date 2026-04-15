@@ -75,9 +75,15 @@ class KitchenPlatosStockViewModel : ViewModel() {
 
         viewModelScope.launch {
             try {
-                withContext(Dispatchers.IO) { applyPlatoStockAndIngredients(existing, delta, newStock) }
+                val appliedStock = withContext(Dispatchers.IO) { patchPlatoStockAndReturnApplied(existing.id, delta, newStock) }
                 val after = _uiState.value
-                _uiState.value = after.copy(updatingIds = after.updatingIds - platoId)
+                val appliedList =
+                    if (appliedStock != newStock) {
+                        after.platos.map { if (it.id == platoId) it.copy(stock = appliedStock) else it }
+                    } else {
+                        after.platos
+                    }
+                _uiState.value = after.copy(platos = appliedList, updatingIds = after.updatingIds - platoId)
             } catch (e: Exception) {
                 val after = _uiState.value
                 val reverted =
@@ -94,23 +100,59 @@ class KitchenPlatosStockViewModel : ViewModel() {
 
     private data class PlateraOsagaiaLite(val osagaiaId: Int, val kopurua: Int)
 
-    private fun applyPlatoStockAndIngredients(existing: KitchenPlatoStock, delta: Int, newStock: Int) {
-        val relations = fetchPlateraOsagaiak(existing.id)
-        val applied = ArrayList<Pair<Int, Int>>(relations.size)
-        try {
-            for (relation in relations) {
-                val ingredientDelta = -(delta * relation.kopurua)
-                if (ingredientDelta == 0) continue
-                patchOsagaiaStock(relation.osagaiaId, ingredientDelta)
-                applied.add(relation.osagaiaId to ingredientDelta)
+    private fun applyPlatoStock(existing: KitchenPlatoStock, newStock: Int): Int {
+        return putProduktuaStock(existing, newStock)
+    }
+
+    private fun patchPlatoStockAndReturnApplied(platoId: Int, delta: Int, fallbackStock: Int): Int {
+        val candidates =
+            apiBaseUrlCandidates().flatMap { baseUrl ->
+                listOf(
+                    "$baseUrl/Produktuak/$platoId/stock",
+                    "$baseUrl/produktuak/$platoId/stock"
+                )
+            }.distinct()
+
+        var lastError: String? = null
+        for (candidateUrl in candidates) {
+            try {
+                val url = URL(candidateUrl)
+                val conn =
+                    (url.openConnection() as HttpURLConnection).apply {
+                        requestMethod = "PATCH"
+                        setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                        setRequestProperty("Accept", "application/json")
+                        doOutput = true
+                        connectTimeout = 15000
+                        readTimeout = 15000
+                    }
+
+                val jsonBody = "{\"kopurua\":$delta}"
+                conn.outputStream.use { it.write(jsonBody.toByteArray(Charsets.UTF_8)) }
+
+                val code = conn.responseCode
+                val body =
+                    (if (code in 200..299) conn.inputStream else conn.errorStream)
+                        ?.bufferedReader()
+                        ?.use { it.readText() }
+                        .orEmpty()
+
+                if (code == 204) return fallbackStock
+                if (code == 200) {
+                    val parsed = runCatching { JSONTokener(body).nextValue() }.getOrNull()
+                    val obj = parsed as? JSONObject
+                    val applied = obj?.optInt("appliedStock", obj.optInt("AppliedStock", fallbackStock)) ?: fallbackStock
+                    return if (applied >= 0) applied else 0
+                }
+                if (code in 200..299) return fallbackStock
+
+                lastError = "url=$candidateUrl code=$code body=${body.take(200)}"
+            } catch (e: Exception) {
+                lastError = "url=$candidateUrl error=${e.message ?: e.javaClass.simpleName}"
             }
-            putProduktuaStock(existing, newStock)
-        } catch (e: Exception) {
-            for ((osagaiaId, ingredientDelta) in applied.asReversed()) {
-                runCatching { patchOsagaiaStock(osagaiaId, -ingredientDelta) }
-            }
-            throw e
         }
+
+        throw IllegalStateException("Ezin izan da stock-a eguneratu ($lastError)")
     }
 
     private fun fetchPlateraOsagaiak(platoId: Int): List<PlateraOsagaiaLite> {
@@ -272,7 +314,7 @@ class KitchenPlatosStockViewModel : ViewModel() {
         return result.sortedWith(compareBy<KitchenPlatoStock> { it.kategoriaId ?: Int.MAX_VALUE }.thenBy { it.izena })
     }
 
-    private fun putProduktuaStock(existing: KitchenPlatoStock, newStock: Int) {
+    private fun putProduktuaStock(existing: KitchenPlatoStock, newStock: Int): Int {
         val platoId = existing.id
         var lastError: String? = null
         for (baseUrl in apiBaseUrlCandidates()) {
@@ -286,7 +328,14 @@ class KitchenPlatosStockViewModel : ViewModel() {
                         .put("MotaId", existing.kategoriaId ?: 0)
                         .put("Stock", newStock)
                 val (code, body) = httpPutJson(url, payload)
-                if (code in 200..299) return
+                if (code == 204) return newStock
+                if (code == 200) {
+                    val parsed = runCatching { JSONTokener(body).nextValue() }.getOrNull()
+                    val obj = parsed as? JSONObject
+                    val applied = obj?.optInt("appliedStock", obj.optInt("AppliedStock", newStock)) ?: newStock
+                    return if (applied >= 0) applied else 0
+                }
+                if (code in 200..299) return newStock
                 lastError = "url=$url code=$code body=${body.take(200)}"
             } catch (e: Exception) {
                 lastError = "url=$url error=${e.message ?: e.javaClass.simpleName}"
